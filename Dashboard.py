@@ -109,7 +109,7 @@ def build_missingness_heatmap_chart(rates_matrix: pd.DataFrame, selected_instrum
     )
 
     fig.update_layout(
-        title="Mapa de Vacíos en la Serie de Tiempo (Azul = Dato Faltante)",
+        title="Mapa de Vacíos",
         xaxis_title="Fecha",
         yaxis_title="Instrumento",
         xaxis={"tickangle": -45, "nticks": 24},
@@ -178,7 +178,7 @@ def render_instrument_filter(all_instruments: list[str], key_prefix: str) -> lis
 
 def render_eda_page() -> None:
     st.title("Análisis Exploratorio de Datos (EDA)")
-    st.caption("Inspección integral de dinámica de tasas y diagnóstico riguroso de valores faltantes.")
+    st.caption("Inspección y diagnóstico de los datos con los que se trabaja.")
 
     if not DATASET_PATH.exists():
         st.error(f"Archivo de datos no encontrado: {DATASET_PATH}")
@@ -267,25 +267,29 @@ def main() -> None:
         st.session_state.current_page = "Análisis Exploratorio (EDA)"
 
     with st.sidebar:
-        st.subheader("Banxico Analytics")
-        st.caption("Navegación")
+        st.header("Banxico Analytics")
 
         eda_type = "primary" if st.session_state.current_page == "Análisis Exploratorio (EDA)" else "secondary"
         if st.button("Análisis Exploratorio (EDA)", use_container_width=True, type=eda_type):
             st.session_state.current_page = "Análisis Exploratorio (EDA)"
             st.rerun()
 
-        model_type = "primary" if st.session_state.current_page == "Modelado y Forecast" else "secondary"
-        if st.button("Modelado y Forecast", use_container_width=True, type=model_type):
-            st.session_state.current_page = "Modelado y Forecast"
+        model_type = "primary" if st.session_state.current_page == "Modelado de los Datos" else "secondary"
+        if st.button("Modelado de los Datos", use_container_width=True, type=model_type):
+            st.session_state.current_page = "Modelado de los Datos"
             st.rerun()
 
     if st.session_state.current_page == "Análisis Exploratorio (EDA)":
         render_eda_page()
     else:
-        st.title("Modelado y Forecast")
-        st.info("Espacio preparado para la siguiente fase analítica y modelado de curvas.")
+        st.title("Modelado de los Datos")
+        st.info("En Construcción")
 
 
 if __name__ == "__main__":
     main()
+
+
+'''
+python -m streamlit run Dashboard.py
+'''
