@@ -1,12 +1,60 @@
-# Byte-compiled / optimized / DLL files
+# ==============================================================================
+# Non-essential project scripts and exploratory code
+# ==============================================================================
+data profiling.py
+PCA.py
+PCA sin ffill.py
+
+# ==============================================================================
+# Local databases and data caches
+# ==============================================================================
+banxico_data.db
+*.db
+*.sqlite
+*.sqlite3
+
+# ==============================================================================
+# Generated reports, static plots and figure artifacts
+# ==============================================================================
+Data Profiling.html
+EDA.png
+PCA sobre cambios.png
+PCA sobre cambios 2.png
+PCA sobre cambios 3.png
+figs/
+scratch/
+
+# ==============================================================================
+# Exercise prompts, LaTeX source and compiled PDF logs
+# ==============================================================================
+ejercicio.pdf
+Log.pdf
+main.pdf
+main.tex
+*.aux
+*.log
+*.out
+*.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+
+# ==============================================================================
+# Environment, secrets and local agent configs
+# ==============================================================================
+.agents/
+.env
+.env.*
+.env.example
+.streamlit/secrets.toml
+
+# ==============================================================================
+# Python bytecode, builds, and virtual environments
+# ==============================================================================
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
 *.so
-
-# Distribution / packaging
 .Python
 build/
 develop-eggs/
@@ -25,8 +73,6 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
-
-# Virtual environments
 venv/
 .venv/
 env/
@@ -35,12 +81,9 @@ ENV/
 env.bak/
 venv.bak/
 
-# Environment variables and secrets
-.env
-.env.*
-!.env.example
-
-# IDEs and editors
+# ==============================================================================
+# IDEs and OS files
+# ==============================================================================
 .vscode/
 .idea/
 *.swp
@@ -48,16 +91,3 @@ venv.bak/
 *~
 .DS_Store
 Thumbs.db
-
-# SQLite and databases
-*.db
-*.sqlite
-*.sqlite3
-
-# Streamlit local settings
-.streamlit/secrets.toml
-
-# Generated reports / Large artifacts
-*.html
-*.pdf
-scratch/
