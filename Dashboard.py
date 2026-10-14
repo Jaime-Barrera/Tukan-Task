@@ -8,6 +8,13 @@ from EDA import (
     calculate_missingness_summary,
     calculate_annual_missingness,
 )
+from pca_analysis import (
+    compute_pca_results,
+    LBL,
+    TENOR,
+    CRISIS_BANDS,
+    PCAResult,
+)
 
 DATASET_PATH = Path("banxico_auction_rates_monthly.csv")
 
@@ -35,6 +42,11 @@ def get_cached_missingness_summary(rates_matrix: pd.DataFrame) -> pd.DataFrame:
 @st.cache_data
 def get_cached_annual_missingness(rates_matrix: pd.DataFrame) -> pd.DataFrame:
     return calculate_annual_missingness(rates_matrix)
+
+
+@st.cache_data
+def get_cached_pca_results(rates_matrix: pd.DataFrame) -> tuple[PCAResult, PCAResult]:
+    return compute_pca_results(rates_matrix)
 
 
 def get_instrument_sort_key(instrument_name: str) -> tuple[int, int]:
@@ -256,7 +268,179 @@ def render_eda_page() -> None:
             st.warning("Selecciona al menos un instrumento para visualizar la tabla resumen.")
 
 
+def build_scree_chart(result: PCAResult) -> go.Figure:
+    n = len(result.explained_variance)
+    components = [f"PC{i + 1}" for i in range(n)]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=components,
+        y=result.explained_variance,
+        name="% varianza",
+        marker_color="lightsteelblue",
+        yaxis="y1",
+    ))
+    fig.add_trace(go.Scatter(
+        x=components,
+        y=result.explained_variance.cumsum(),
+        mode="lines+markers",
+        name="% acumulado",
+        line={"color": "crimson"},
+        yaxis="y2",
+    ))
+    fig.add_hline(y=95, line_dash="dash", line_color="grey", annotation_text="95%", yref="y2")
+    fig.update_layout(
+        title=f"Scree Plot — PCA sobre {result.label}",
+        xaxis_title="Componente",
+        yaxis={"title": "% varianza"},
+        yaxis2={"title": "% acumulado", "overlaying": "y", "side": "right", "range": [0, 105]},
+        legend={"orientation": "h", "y": -0.25},
+        **BASE_LAYOUT,
+    )
+    return fig
+
+
+def build_loadings_chart(result: PCAResult, n_pcs: int = 3) -> go.Figure:
+    palette = px.colors.qualitative.Plotly
+    fig = go.Figure()
+    for j in range(n_pcs):
+        fig.add_trace(go.Scatter(
+            x=LBL,
+            y=result.loadings[j],
+            mode="lines+markers",
+            name=f"PC{j + 1} ({result.explained_variance[j]:.1f}%)",
+            line={"color": palette[j % len(palette)]},
+            marker={"size": 7},
+        ))
+    fig.add_hline(y=0, line_color="grey", line_width=0.8)
+    fig.update_layout(
+        title=f"Loadings por Plazo — PCA sobre {result.label}",
+        xaxis_title="Plazo",
+        yaxis_title="Loading",
+        legend={"orientation": "h", "y": -0.25},
+        **BASE_LAYOUT,
+    )
+    return fig
+
+
+def build_scores_chart(result: PCAResult, n_pcs: int = 3) -> go.Figure:
+    palette = px.colors.qualitative.Plotly
+    fig = go.Figure()
+    for j in range(n_pcs):
+        col = f"PC{j + 1}"
+        fig.add_trace(go.Scatter(
+            x=result.scores.index,
+            y=result.scores[col],
+            mode="lines",
+            name=f"PC{j + 1} ({result.explained_variance[j]:.1f}%)",
+            line={"color": palette[j % len(palette)], "width": 1.2},
+        ))
+
+    for start, end, name in CRISIS_BANDS:
+        fig.add_vrect(
+            x0=start, x1=end,
+            fillcolor="red", opacity=0.06,
+            layer="below", line_width=0,
+            annotation_text=name,
+            annotation_position="top left",
+            annotation_font_size=9,
+        )
+
+    fig.add_hline(y=0, line_color="grey", line_width=0.5)
+    fig.update_layout(
+        title=f"Scores en el Tiempo — PCA sobre {result.label}",
+        xaxis_title="Fecha",
+        yaxis_title="Score",
+        hovermode="x unified",
+        legend={"orientation": "h", "y": -0.2},
+        **BASE_LAYOUT,
+    )
+    return fig
+
+
+def build_cumulative_variance_table(lvl: PCAResult, chg: PCAResult) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "Niveles (%)": [f"{v:.1f}" for v in lvl.explained_variance.cumsum()],
+            "Cambios (%)": [f"{v:.1f}" for v in chg.explained_variance.cumsum()],
+        },
+        index=[f"PC{i + 1}" for i in range(len(lvl.explained_variance))],
+    )
+
+
+def render_modeling_page() -> None:
+    st.title("Modelado de los Datos")
+    st.caption("Análisis de Componentes Principales (PCA) sobre la curva de tasas Banxico.")
+
+    if not DATASET_PATH.exists():
+        st.error(f"Archivo de datos no encontrado: {DATASET_PATH}")
+        st.stop()
+
+    rates_matrix = get_cached_rates_data(DATASET_PATH)
+
+    try:
+        result_lvl, result_chg = get_cached_pca_results(rates_matrix)
+    except ValueError as exc:
+        st.error(f"Error al ejecutar PCA: {exc}")
+        st.stop()
+
+    ini = result_chg.scores.index.min().strftime("%Y-%m")
+    fin = result_chg.scores.index.max().strftime("%Y-%m")
+    n_months = len(result_chg.scores)
+
+    mc1, mc2, mc3 = st.columns(3)
+    with mc1:
+        st.metric("Serie de Trabajo", f"{ini} → {fin}")
+    with mc2:
+        st.metric("Meses Analizados", f"{n_months}")
+    with mc3:
+        pcs_95 = int((result_chg.explained_variance.cumsum() >= 95).argmax()) + 1
+        st.metric("PCs para 95% varianza (cambios)", f"{pcs_95}")
+
+    st.markdown("---")
+
+    mode = st.segmented_control(
+        "Versión del PCA",
+        options=["Cambios Mensuales", "Niveles"],
+        default="Cambios Mensuales",
+        key="pca_mode",
+    )
+    active = result_chg if mode == "Cambios Mensuales" else result_lvl
+
+    tab_scree, tab_loadings, tab_scores, tab_tabla = st.tabs([
+        "Scree Plot", "Loadings", "Scores en el Tiempo", "Varianza Acumulada",
+    ])
+
+    with tab_scree:
+        st.plotly_chart(build_scree_chart(active), use_container_width=True, config=PLOTLY_CONFIG)
+
+    with tab_loadings:
+        n_pcs = st.slider("Componentes a mostrar", min_value=1, max_value=9, value=3, key="pca_n_loadings")
+        st.plotly_chart(build_loadings_chart(active, n_pcs=n_pcs), use_container_width=True, config=PLOTLY_CONFIG)
+
+    with tab_scores:
+        n_pcs_sc = st.slider("Componentes a mostrar", min_value=1, max_value=9, value=3, key="pca_n_scores")
+        st.plotly_chart(build_scores_chart(active, n_pcs=n_pcs_sc), use_container_width=True, config=PLOTLY_CONFIG)
+
+    with tab_tabla:
+        st.subheader("Varianza Explicada Acumulada")
+        st.dataframe(
+            build_cumulative_variance_table(result_lvl, result_chg),
+            use_container_width=True,
+        )
+        with st.expander("Loadings completos (PC1–PC3)"):
+            st.dataframe(
+                pd.DataFrame(
+                    active.loadings[:3].round(3),
+                    index=["PC1", "PC2", "PC3"],
+                    columns=LBL,
+                ),
+                use_container_width=True,
+            )
+
+
 def main() -> None:
+
     st.set_page_config(
         page_title="Banxico Analytics",
         layout="wide",
@@ -282,14 +466,12 @@ def main() -> None:
     if st.session_state.current_page == "Análisis Exploratorio (EDA)":
         render_eda_page()
     else:
-        st.title("Modelado de los Datos")
-        st.info("En Construcción")
+        render_modeling_page()
 
 
 if __name__ == "__main__":
     main()
 
 
-'''
-python -m streamlit run Dashboard.py
-'''
+
+#   python -m streamlit run Dashboard.py
