@@ -240,7 +240,7 @@ def render_instrument_filter(all_instruments: list[str], key_prefix: str) -> lis
 
 
 def render_eda_page() -> None:
-    st.title("Análisis Exploratorio de Datos (EDA)")
+    st.title("Análisis Exploratorio")
     st.caption("Inspección y diagnóstico de los datos con los que se trabaja.")
 
     if not DATASET_PATH.exists():
@@ -705,7 +705,7 @@ def build_instrument_fan_chart(
     )
 
     fig.update_layout(
-        title=f"Fan Chart: Trayectoria y Cono de Probabilidad — {instrument_name}",
+        title=f"Trayectoria y Cono de Probabilidad — {instrument_name}",
         xaxis_title="Fecha",
         yaxis_title="Tasa de Interés (%)",
         yaxis={"tickformat": ".2f", "ticksuffix": "%"},
@@ -786,11 +786,11 @@ def render_forecasting_page() -> None:
         "Densidad por Instrumento (Fan Chart)",
         "Curva Pronosticada",
         "Scores Pronosticados",
-        "Evaluación OOS (Sin Leakage)",
+        "Evaluación OOS",
     ])
 
     with tab_fan:
-        st.subheader("Cono de Incertidumbre Predictiva (Fan Chart)")
+        st.subheader("Cono de Incertidumbre Predictiva")
         st.caption(
             "Muestra los últimos datos reales observados de un instrumento conectándose continuamente con su cono de incertidumbre predictiva a los horizontes futuros."
         )
@@ -841,10 +841,10 @@ def render_forecasting_page() -> None:
         )
 
     with tab_eval:
-        st.subheader("RMSE fuera de muestra (walk-forward estricto sin data leakage)")
+        st.subheader("RMSE fuera de muestra (walk-forward)")
         st.caption(
-            "En cada paso de la evaluación, el PCA y la normalización se reentrenan exclusivamente "
-            "con los datos pasados, evaluando el pronóstico desestandarizado contra las tasas reales de mercado de Banxico."
+            "En cada paso de la evaluación, el PCA y la normalización se reentrenan "
+            "exclusivamente con los datos pasados, evaluando el pronóstico desestandarizado contra las tasas reales de mercado de Banxico."
         )
         try:
             eval_key = f"{pca_version}_{len(working_rates)}_{horizon}"
@@ -871,14 +871,14 @@ def main() -> None:
     )
 
     if "current_page" not in st.session_state:
-        st.session_state.current_page = "Análisis Exploratorio (EDA)"
+        st.session_state.current_page = "Análisis Exploratorio"
 
     with st.sidebar:
         st.header("Banxico Analytics")
 
-        eda_type = "primary" if st.session_state.current_page == "Análisis Exploratorio (EDA)" else "secondary"
-        if st.button("Análisis Exploratorio (EDA)", use_container_width=True, type=eda_type):
-            st.session_state.current_page = "Análisis Exploratorio (EDA)"
+        eda_type = "primary" if st.session_state.current_page == "Análisis Exploratorio" else "secondary"
+        if st.button("Análisis Exploratorio", use_container_width=True, type=eda_type):
+            st.session_state.current_page = "Análisis Exploratorio"
             st.rerun()
 
         model_type = "primary" if st.session_state.current_page == "Modelado de los Datos" else "secondary"
@@ -891,7 +891,7 @@ def main() -> None:
             st.session_state.current_page = "Forecasting"
             st.rerun()
 
-    if st.session_state.current_page == "Análisis Exploratorio (EDA)":
+    if st.session_state.current_page == "Análisis Exploratorio":
         render_eda_page()
     elif st.session_state.current_page == "Modelado de los Datos":
         render_modeling_page()
