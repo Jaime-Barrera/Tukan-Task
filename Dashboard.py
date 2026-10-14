@@ -1,6 +1,7 @@
+import numpy as np
+import pandas as pd
 from pathlib import Path
 import streamlit as st
-import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from EDA import (
@@ -10,10 +11,19 @@ from EDA import (
 )
 from pca_analysis import (
     compute_pca_results,
+    prepare_working_series,
     LBL,
     TENOR,
     CRISIS_BANDS,
     PCAResult,
+)
+from forecasting import (
+    forecast_random_walk,
+    forecast_ou_ar1,
+    forecast_var,
+    evaluate_models_oos,
+    ForecastResult,
+    HORIZON_OPTIONS,
 )
 
 DATASET_PATH = Path("banxico_auction_rates_monthly.csv")
@@ -45,8 +55,49 @@ def get_cached_annual_missingness(rates_matrix: pd.DataFrame) -> pd.DataFrame:
 
 
 @st.cache_data
-def get_cached_pca_results(rates_matrix: pd.DataFrame) -> tuple[PCAResult, PCAResult]:
+def get_cached_pca_results(rates_matrix: pd.DataFrame, version: str = "v3") -> tuple[PCAResult, PCAResult]:
     return compute_pca_results(rates_matrix)
+
+
+@st.cache_data
+def get_cached_forecasts(
+    scores_key: str,
+    scores: pd.DataFrame,
+    loadings_flat: bytes,
+    horizon: int,
+    feature_means: pd.Series | None = None,
+    feature_stds: pd.Series | None = None,
+    last_observed_rates: pd.Series | None = None,
+    is_changes: bool = False,
+) -> dict[str, ForecastResult]:
+    loadings = np.frombuffer(loadings_flat, dtype=np.float64).reshape(-1, len(LBL))
+    return {
+        "Random Walk": forecast_random_walk(
+            scores, loadings, horizon,
+            feature_means=feature_means, feature_stds=feature_stds,
+            last_observed_rates=last_observed_rates, is_changes=is_changes,
+        ),
+        "O-U / AR(1)": forecast_ou_ar1(
+            scores, loadings, horizon,
+            feature_means=feature_means, feature_stds=feature_stds,
+            last_observed_rates=last_observed_rates, is_changes=is_changes,
+        ),
+        "VAR": forecast_var(
+            scores, loadings, horizon,
+            feature_means=feature_means, feature_stds=feature_stds,
+            last_observed_rates=last_observed_rates, is_changes=is_changes,
+        ),
+    }
+
+
+@st.cache_data
+def get_cached_oos_eval(
+    eval_key: str,
+    working_rates: pd.DataFrame,
+    horizon: int,
+    is_changes: bool = True,
+) -> pd.DataFrame:
+    return evaluate_models_oos(working_rates, horizon, is_changes=is_changes)
 
 
 def get_instrument_sort_key(instrument_name: str) -> tuple[int, int]:
@@ -439,6 +490,378 @@ def render_modeling_page() -> None:
             )
 
 
+def build_curve_forecast_chart(
+    forecasts: dict[str, ForecastResult],
+    step: int,
+    last_observed_rates: pd.Series,
+) -> go.Figure:
+    if not forecasts:
+        raise ValueError("Forecasts dictionary cannot be empty.")
+    if step < 1:
+        raise ValueError(f"Step must be at least 1, received: {step}")
+
+    palette = px.colors.qualitative.Plotly
+    fig = go.Figure()
+
+    last_date = list(forecasts.values())[0].last_observed_date
+    observed_curve = pd.Series(last_observed_rates.values, index=LBL)
+
+    fig.add_trace(go.Scatter(
+        x=LBL,
+        y=observed_curve.values,
+        mode="lines+markers",
+        name=f"Observado ({last_date.strftime('%Y-%m')})",
+        line={"color": "black", "width": 2.2},
+        marker={"size": 8, "color": "black"},
+    ))
+
+    for idx, (model_name, fc_result) in enumerate(forecasts.items()):
+        if step <= len(fc_result.curve_forecasts):
+            forecast_curve = fc_result.curve_forecasts.iloc[step - 1]
+            fc_date = fc_result.forecast_dates[step - 1].strftime("%Y-%m")
+            fig.add_trace(go.Scatter(
+                x=LBL,
+                y=forecast_curve.values,
+                mode="lines+markers",
+                name=f"{model_name} (h={step}, {fc_date})",
+                line={"color": palette[(idx + 1) % len(palette)], "width": 1.8, "dash": "dash"},
+                marker={"size": 6},
+            ))
+
+    fig.update_layout(
+        title=f"Curva de Tasas Pronosticada — Paso h={step}",
+        xaxis_title="Plazo",
+        yaxis_title="Tasa de Interés (%)",
+        legend={"orientation": "h", "y": -0.25},
+        **BASE_LAYOUT,
+    )
+    return fig
+
+
+def build_score_forecast_chart(forecasts: dict[str, ForecastResult], pc_index: int) -> go.Figure:
+    if not forecasts:
+        raise ValueError("Forecasts dictionary cannot be empty.")
+    if pc_index < 0 or pc_index > 2:
+        raise ValueError(f"pc_index must be between 0 and 2, got: {pc_index}")
+
+    palette = px.colors.qualitative.Plotly
+    fig = go.Figure()
+    col = f"PC{pc_index + 1}"
+
+    for idx, (model_name, fc_result) in enumerate(forecasts.items()):
+        if col in fc_result.score_forecasts.columns:
+            fig.add_trace(go.Scatter(
+                x=fc_result.forecast_dates,
+                y=fc_result.score_forecasts[col],
+                mode="lines+markers",
+                name=model_name,
+                line={"color": palette[idx % len(palette)], "dash": "dot"},
+                marker={"size": 5},
+            ))
+
+    pc_labels = {0: "PC1 — Nivel", 1: "PC2 — Pendiente", 2: "PC3 — Curvatura"}
+    fig.update_layout(
+        title=f"Forecast de Scores: {pc_labels.get(pc_index, col)}",
+        xaxis_title="Fecha",
+        yaxis_title="Score",
+        legend={"orientation": "h", "y": -0.25},
+        **BASE_LAYOUT,
+    )
+    return fig
+
+
+def build_instrument_fan_chart(
+    working_rates: pd.DataFrame,
+    forecasts: dict[str, ForecastResult],
+    instrument_name: str,
+    model_name: str,
+    lookback: int = 6,
+) -> go.Figure:
+    if not isinstance(working_rates, pd.DataFrame):
+        raise TypeError("working_rates must be a DataFrame.")
+    if instrument_name not in working_rates.columns:
+        raise KeyError(f"Instrument '{instrument_name}' not found in working rates.")
+    if model_name not in forecasts:
+        raise KeyError(f"Model '{model_name}' not found in forecasts.")
+
+    fc = forecasts[model_name]
+    inst_idx = list(working_rates.columns).index(instrument_name)
+    lbl = LBL[inst_idx]
+
+    hist_series = working_rates[instrument_name].dropna().tail(lookback)
+    hist_dates = hist_series.index
+    hist_values = hist_series.values
+    last_date = hist_dates[-1]
+    last_val = hist_values[-1]
+
+    fc_dates = fc.forecast_dates
+    fc_vals = fc.curve_forecasts[lbl].values
+    fc_stds = fc.curve_stds[lbl].values if not fc.curve_stds.empty else np.zeros_like(fc_vals)
+
+    conn_dates = [last_date] + list(fc_dates)
+    conn_mean = np.array([last_val] + list(fc_vals))
+    conn_std = np.array([0.0] + list(fc_stds))
+
+    up_95 = conn_mean + 1.95996 * conn_std
+    lo_95 = conn_mean - 1.95996 * conn_std
+    up_80 = conn_mean + 1.28155 * conn_std
+    lo_80 = conn_mean - 1.28155 * conn_std
+    up_50 = conn_mean + 0.67449 * conn_std
+    lo_50 = conn_mean - 0.67449 * conn_std
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=hist_dates,
+        y=hist_values,
+        mode="lines+markers",
+        name=f"Histórico ({lookback}m)",
+        line={"color": "#111827", "width": 2.5},
+        marker={"size": 7, "color": "#111827"},
+        hovertemplate="%{x|%Y-%m}: %{y:.2f}%<extra></extra>",
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=conn_dates,
+        y=up_95,
+        mode="lines",
+        line={"width": 0},
+        showlegend=False,
+        hoverinfo="skip",
+    ))
+    fig.add_trace(go.Scatter(
+        x=conn_dates,
+        y=lo_95,
+        mode="lines",
+        line={"width": 0},
+        fill="tonexty",
+        fillcolor="rgba(37, 99, 235, 0.12)",
+        name="IC 95% (Densidad)",
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=conn_dates,
+        y=up_80,
+        mode="lines",
+        line={"width": 0},
+        showlegend=False,
+        hoverinfo="skip",
+    ))
+    fig.add_trace(go.Scatter(
+        x=conn_dates,
+        y=lo_80,
+        mode="lines",
+        line={"width": 0},
+        fill="tonexty",
+        fillcolor="rgba(37, 99, 235, 0.20)",
+        name="IC 80% (Densidad)",
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=conn_dates,
+        y=up_50,
+        mode="lines",
+        line={"width": 0},
+        showlegend=False,
+        hoverinfo="skip",
+    ))
+    fig.add_trace(go.Scatter(
+        x=conn_dates,
+        y=lo_50,
+        mode="lines",
+        line={"width": 0},
+        fill="tonexty",
+        fillcolor="rgba(37, 99, 235, 0.32)",
+        name="IC 50% (Densidad)",
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=conn_dates,
+        y=conn_mean,
+        mode="lines+markers",
+        name=f"Pronóstico {model_name}",
+        line={"color": "#1d4ed8", "width": 2.2, "dash": "dash"},
+        marker={"size": 6, "color": "#1d4ed8"},
+        hovertemplate="%{x|%Y-%m}: %{y:.2f}%<extra></extra>",
+    ))
+
+    fig.add_shape(
+        type="line",
+        x0=last_date,
+        x1=last_date,
+        y0=0,
+        y1=1,
+        yref="paper",
+        line={"dash": "dot", "color": "gray", "width": 1.5},
+    )
+    fig.add_annotation(
+        x=last_date,
+        y=1.02,
+        yref="paper",
+        text="Último dato real",
+        showarrow=False,
+        xanchor="right",
+        font={"size": 10, "color": "gray"},
+    )
+
+    fig.update_layout(
+        title=f"Fan Chart: Trayectoria y Cono de Probabilidad — {instrument_name}",
+        xaxis_title="Fecha",
+        yaxis_title="Tasa de Interés (%)",
+        yaxis={"tickformat": ".2f", "ticksuffix": "%"},
+        legend={"orientation": "h", "y": -0.22},
+        height=520,
+        **BASE_LAYOUT,
+    )
+    return fig
+
+
+def render_forecasting_page() -> None:
+    st.title("Forecasting de la Curva de Tasas")
+    st.caption(
+        "Tres modelos compiten: Random Walk (benchmark), O-U / AR(1) (mean reversion físico) y VAR(p) "
+        "(acoplamiento entre modos normales de la curva)."
+    )
+
+    if not DATASET_PATH.exists():
+        st.error(f"Archivo de datos no encontrado: {DATASET_PATH}")
+        st.stop()
+
+    rates_matrix = get_cached_rates_data(DATASET_PATH)
+    working_rates = prepare_working_series(rates_matrix)
+
+    try:
+        result_lvl, result_chg = get_cached_pca_results(rates_matrix, version="v3")
+    except ValueError as exc:
+        st.error(f"Error al ejecutar PCA: {exc}")
+        st.stop()
+
+    col_hz, col_ver = st.columns([2, 2])
+    with col_hz:
+        horizon_label = st.selectbox(
+            "Horizonte de pronóstico",
+            options=list(HORIZON_OPTIONS.keys()),
+            index=1,
+            key="fc_horizon",
+        )
+    with col_ver:
+        pca_version = st.segmented_control(
+            "Versión del PCA",
+            options=["Cambios Mensuales", "Niveles"],
+            default="Cambios Mensuales",
+            key="fc_pca_version",
+        )
+
+    horizon = HORIZON_OPTIONS[horizon_label]
+    is_changes = (pca_version == "Cambios Mensuales")
+    active = result_chg if is_changes else result_lvl
+
+    if is_changes:
+        diff_data = working_rates.diff().dropna()
+        f_means = active.feature_means if active.feature_means is not None else diff_data.mean()
+        f_stds = active.feature_stds if active.feature_stds is not None else diff_data.std()
+    else:
+        f_means = active.feature_means if active.feature_means is not None else working_rates.mean()
+        f_stds = active.feature_stds if active.feature_stds is not None else working_rates.std()
+
+    loadings_flat = active.loadings.astype("float64").tobytes()
+    scores_key = f"{pca_version}_{len(active.scores)}_{horizon}_v3"
+    last_rates = working_rates.iloc[-1]
+
+    with st.spinner("Calculando pronósticos..."):
+        forecasts = get_cached_forecasts(
+            scores_key,
+            active.scores,
+            loadings_flat,
+            horizon,
+            feature_means=f_means,
+            feature_stds=f_stds,
+            last_observed_rates=last_rates,
+            is_changes=is_changes,
+        )
+
+    st.markdown("---")
+
+    tab_fan, tab_curve, tab_scores_fc, tab_eval = st.tabs([
+        "Densidad por Instrumento (Fan Chart)",
+        "Curva Pronosticada",
+        "Scores Pronosticados",
+        "Evaluación OOS (Sin Leakage)",
+    ])
+
+    with tab_fan:
+        st.subheader("Cono de Incertidumbre Predictiva (Fan Chart)")
+        st.caption(
+            "Muestra los últimos datos reales observados de un instrumento conectándose continuamente con su cono de incertidumbre predictiva a los horizontes futuros."
+        )
+        col_inst, col_mod, col_look = st.columns([2, 2, 1])
+        with col_inst:
+            selected_instrument = st.selectbox("Instrumento", options=TENOR, index=0, key="fan_inst_sel")
+        with col_mod:
+            selected_model = st.radio("Modelo", options=["VAR", "O-U / AR(1)", "Random Walk"], horizontal=True, key="fan_mod_sel")
+        with col_look:
+            lookback_val = st.slider("Histórico (meses)", min_value=3, max_value=24, value=6, key="fan_lookback")
+
+        st.plotly_chart(
+            build_instrument_fan_chart(
+                working_rates,
+                forecasts,
+                selected_instrument,
+                selected_model,
+                lookback=lookback_val,
+            ),
+            use_container_width=True,
+            config=PLOTLY_CONFIG,
+        )
+
+    with tab_curve:
+        step = st.slider(
+            "Paso hacia adelante (meses)",
+            min_value=1, max_value=horizon, value=min(3, horizon),
+            key="fc_step_slider",
+        )
+        st.plotly_chart(
+            build_curve_forecast_chart(forecasts, step, last_rates),
+            use_container_width=True,
+            config=PLOTLY_CONFIG,
+        )
+
+    with tab_scores_fc:
+        pc_sel = st.radio(
+            "Componente",
+            options=["PC1 — Nivel", "PC2 — Pendiente", "PC3 — Curvatura"],
+            horizontal=True,
+            key="fc_pc_radio",
+        )
+        pc_idx = {"PC1 — Nivel": 0, "PC2 — Pendiente": 1, "PC3 — Curvatura": 2}[pc_sel]
+        st.plotly_chart(
+            build_score_forecast_chart(forecasts, pc_idx),
+            use_container_width=True,
+            config=PLOTLY_CONFIG,
+        )
+
+    with tab_eval:
+        st.subheader("RMSE fuera de muestra (walk-forward estricto sin data leakage)")
+        st.caption(
+            "En cada paso de la evaluación, el PCA y la normalización se reentrenan exclusivamente "
+            "con los datos pasados, evaluando el pronóstico desestandarizado contra las tasas reales de mercado de Banxico."
+        )
+        try:
+            eval_key = f"{pca_version}_{len(working_rates)}_{horizon}"
+            oos_table = get_cached_oos_eval(eval_key, working_rates, horizon, is_changes=is_changes)
+            st.dataframe(oos_table, use_container_width=True)
+        except ValueError as exc:
+            st.warning(f"No hay suficientes datos para evaluación OOS: {exc}")
+
+        with st.expander("Tablas de pronóstico por modelo (tasas en %)"):
+            for model_name, fc_result in forecasts.items():
+                st.markdown(f"**{model_name}**")
+                display_df = fc_result.curve_forecasts.copy()
+                display_df.index = fc_result.forecast_dates.strftime("%Y-%m")
+                display_df.index.name = "Fecha"
+                st.dataframe(display_df.round(4), use_container_width=True)
+
+
 def main() -> None:
 
     st.set_page_config(
@@ -463,10 +886,17 @@ def main() -> None:
             st.session_state.current_page = "Modelado de los Datos"
             st.rerun()
 
+        fc_type = "primary" if st.session_state.current_page == "Forecasting" else "secondary"
+        if st.button("Forecasting", use_container_width=True, type=fc_type):
+            st.session_state.current_page = "Forecasting"
+            st.rerun()
+
     if st.session_state.current_page == "Análisis Exploratorio (EDA)":
         render_eda_page()
-    else:
+    elif st.session_state.current_page == "Modelado de los Datos":
         render_modeling_page()
+    else:
+        render_forecasting_page()
 
 
 if __name__ == "__main__":

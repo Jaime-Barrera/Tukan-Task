@@ -24,6 +24,8 @@ class PCAResult:
     scores: pd.DataFrame
     explained_variance: np.ndarray
     label: str
+    feature_means: pd.Series | None = None
+    feature_stds: pd.Series | None = None
 
 
 def _fix_sign_convention(V: np.ndarray) -> np.ndarray:
@@ -38,7 +40,9 @@ def run_pca(series: pd.DataFrame, label: str) -> PCAResult:
         raise ValueError("Input series contains NaN values. Apply ffill/dropna before calling run_pca.")
 
     n_components = min(9, series.shape[1])
-    X = (series - series.mean()) / series.std()
+    means = series.mean()
+    stds = series.std()
+    X = (series - means) / stds
     pca = PCA(n_components=n_components).fit(X)
     V = _fix_sign_convention(pca.components_.copy())
 
@@ -48,7 +52,14 @@ def run_pca(series: pd.DataFrame, label: str) -> PCAResult:
         columns=[f"PC{i + 1}" for i in range(n_components)],
     )
     explained = pca.explained_variance_ratio_ * 100
-    return PCAResult(loadings=V, scores=scores, explained_variance=explained, label=label)
+    return PCAResult(
+        loadings=V,
+        scores=scores,
+        explained_variance=explained,
+        label=label,
+        feature_means=means,
+        feature_stds=stds,
+    )
 
 
 def prepare_working_series(wide: pd.DataFrame) -> pd.DataFrame:
