@@ -1,17 +1,17 @@
 # Banxico Auction Rates Explorer & Dashboard
 
-Interactive analysis and dashboard exploring Banxico monthly auction rates for government securities (CETES, BONDES, UDIBONOS, BONOS).
+Interactive analysis and dashboard exploring Banxico monthly auction rates for government securities (CETEs and MBONOs).
 
-## Live App
+## Live Application
 
-The application is deployed and available directly on Streamlit Community Cloud:
-- Access the dashboard via your Streamlit Community Cloud workspace or public deployment link.
+The interactive dashboard is deployed on Streamlit Community Cloud:
+- URL: https://banxico-rates.streamlit.app/
 
-## Project Structure
+## Project Modules
 
-- `Dashboard.py`: Main entry point for the Streamlit application.
-- `EDA.py`: Core analytical routines, schema validation, and statistical metrics.
-- `data profiling.py`: Data profiling report generator.
-- `banxico_auction_rates_monthly.csv`: Dataset containing historical auction rates.
-- `requirements.txt`: Python package dependencies used by Streamlit Cloud to build the environment.
-- `TECHNICAL_INFO.md`: Technical documentation covering module architecture and function contracts.
+- `Dashboard.py`: Main entry point for the Streamlit web application.
+- `EDA.py`: Ingestion, schema validation, and missingness analysis routines.
+- `pca_analysis.py`: Principal Component Analysis (PCA) and yield curve factor extraction.
+- `forecasting.py`: Econometric forecasting models (Random Walk, Ornstein-Uhlenbeck / AR(1), VAR) and uncertainty cone estimation.
+- `banxico_auction_rates_monthly.csv`: Historical monthly auction rates dataset.
+- `requirements.txt`: Python package dependencies for Streamlit Cloud deployment.
